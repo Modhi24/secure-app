@@ -7,6 +7,8 @@ and SQL Injection detection and mitigation.
 import sqlite3
 from flask import Flask, render_template, request, session, redirect
 import hashlib  # used for MD5 hashing (weak - for demonstration only)
+import re      # regular expressions - used to check password rules
+import bcrypt  # strong password hashing (salted + slow on purpose)
 
 app = Flask(__name__)
 
@@ -35,6 +37,14 @@ def init_db():
 def home():
     return redirect("/login")
 
+# Password policy: at least 8 characters, one uppercase, one lowercase,
+# one number and one special character. Weak passwords are rejected.
+def is_strong_password(p):
+    return (len(p) >= 8
+            and re.search(r"[A-Z]", p)
+            and re.search(r"[a-z]", p)
+            and re.search(r"\d", p)
+            and re.search(r"[^A-Za-z0-9]", p))
 
 # Registration: create a new user account
 @app.route("/register", methods=["GET", "POST"])
@@ -43,6 +53,10 @@ def register():
     if request.method == "POST":
         username = request.form["username"]
         password = request.form["password"]
+                # Reject weak passwords before saving anything
+        if not is_strong_password(password):
+            message = "Password does not meet the requirements below"
+            return render_template("register.html", message=message)
         conn = sqlite3.connect("database.db")
         try:
             # VULNERABLE VERSION (before fix):
@@ -51,10 +65,12 @@ def register():
             # so an attacker could inject SQL code.
             #
             # SECURE: parameterized query - user input is treated as data, not SQL code
-            # WEAK PASSWORD STORAGE (vulnerable on purpose):
-            # MD5 is very fast and has no salt, so the same password always
-            # gives the same hash and it can be cracked with rainbow tables.
-            hashed = hashlib.md5(password.encode()).hexdigest()
+            # BEFORE (weak): hashed = hashlib.md5(password.encode()).hexdigest()
+            # MD5 is fast and unsalted -> cracked instantly by crackstation.
+            # SECURE: bcrypt adds a random salt to every password (so the same
+            # password gives a different hash each time) and is slow on purpose,
+            # which makes rainbow tables and brute-force attacks impractical.
+            hashed = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
             conn.execute(
                 "INSERT INTO users (username, password) VALUES (?, ?)",
                 (username, hashed)
@@ -81,17 +97,17 @@ def login():
         # because '1'='1' is always true and -- comments out the password check.
         #
         # SECURE: parameterized query prevents SQL Injection
-                # Hash the entered password with MD5 and compare it to the stored hash
-        hashed = hashlib.md5(password.encode()).hexdigest()
-        user = conn.execute(
-            "SELECT username, role FROM users WHERE username=? AND password=?",
-            (username, hashed)
+        # bcrypt hashes contain a random salt, so we cannot compare them
+        # inside SQL. Get the user by username, then let bcrypt check it.
+        row = conn.execute(
+            "SELECT username, password, role FROM users WHERE username=?",
+            (username,)
         ).fetchone()
         conn.close()
-        if user:
+        if row and bcrypt.checkpw(password.encode(), row[1].encode()):
             # Store user info in the session to keep them logged in
-            session["username"] = user[0]
-            session["role"] = user[1]
+            session["username"] = row[0]
+            session["role"] = row[2]
             return redirect("/dashboard")
         message = "Invalid username or password"
     return render_template("login.html", message=message)
