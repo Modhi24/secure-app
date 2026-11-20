@@ -5,8 +5,11 @@ and SQL Injection detection and mitigation.
 """
 
 import sqlite3
-from flask import Flask, render_template, request, session, redirect
-
+from flask import Flask, render_template, request, session, redirect, abort
+from functools import wraps  # keeps the original function name when using a decoratorimport hashlib  # used for MD5 hashing (weak - for demonstration only)
+import re      # regular expressions - used to check password rules
+import bcrypt  # strong password hashing (salted + slow on purpose)
+import bleach  # removes dangerous HTML/JavaScript from user input (XSS protection)
 app = Flask(__name__)
 
 # Secret key used to sign the session cookie so users cannot modify it
@@ -25,6 +28,16 @@ def init_db():
             role TEXT DEFAULT 'user'
         )
     """)
+
+    # Comments table: stores user comments (used to demonstrate XSS)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS comments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT NOT NULL,
+            content TEXT NOT NULL
+        )
+    """)
+
     conn.commit()
     conn.close()
 
@@ -34,6 +47,14 @@ def init_db():
 def home():
     return redirect("/login")
 
+# Password policy: at least 8 characters, one uppercase, one lowercase,
+# one number and one special character. Weak passwords are rejected.
+def is_strong_password(p):
+    return (len(p) >= 8
+            and re.search(r"[A-Z]", p)
+            and re.search(r"[a-z]", p)
+            and re.search(r"\d", p)
+            and re.search(r"[^A-Za-z0-9]", p))
 
 # Registration: create a new user account
 @app.route("/register", methods=["GET", "POST"])
@@ -42,17 +63,26 @@ def register():
     if request.method == "POST":
         username = request.form["username"]
         password = request.form["password"]
+                # Reject weak passwords before saving anything
+        if not is_strong_password(password):
+            message = "Password does not meet the requirements below"
+            return render_template("register.html", message=message)
         conn = sqlite3.connect("database.db")
         try:
             # VULNERABLE VERSION (before fix):
             #   query = f"INSERT INTO users (username, password) VALUES ('{username}', '{password}')"
             # User input was inserted directly into the SQL string,
             # so an attacker could inject SQL code.
-            #
             # SECURE: parameterized query - user input is treated as data, not SQL code
+            # BEFORE (weak): hashed = hashlib.md5(password.encode()).hexdigest()
+            # MD5 is fast and unsalted -> cracked instantly by crackstation.
+            # SECURE: bcrypt adds a random salt to every password (so the same
+            # password gives a different hash each time) and is slow on purpose,
+            # which makes rainbow tables and brute-force attacks impractical.
+            hashed = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
             conn.execute(
                 "INSERT INTO users (username, password) VALUES (?, ?)",
-                (username, password)
+                (username, hashed)
             )
             conn.commit()
             message = "Registered successfully!"
@@ -74,17 +104,18 @@ def login():
         #   query = f"SELECT ... WHERE username='{username}' AND password='{password}'"
         # Entering  ' OR '1'='1' --  as username bypassed the login,
         # because '1'='1' is always true and -- comments out the password check.
-        #
         # SECURE: parameterized query prevents SQL Injection
-        user = conn.execute(
-            "SELECT username, role FROM users WHERE username=? AND password=?",
-            (username, password)
+        # bcrypt hashes contain a random salt, so we cannot compare them
+        # inside SQL. Get the user by username, then let bcrypt check it.
+        row = conn.execute(
+            "SELECT username, password, role FROM users WHERE username=?",
+            (username,)
         ).fetchone()
         conn.close()
-        if user:
+        if row and bcrypt.checkpw(password.encode(), row[1].encode()):
             # Store user info in the session to keep them logged in
-            session["username"] = user[0]
-            session["role"] = user[1]
+            session["username"] = row[0]
+            session["role"] = row[2]
             return redirect("/dashboard")
         message = "Invalid username or password"
     return render_template("login.html", message=message)
@@ -96,6 +127,63 @@ def dashboard():
     if "username" not in session:
         return redirect("/login")
     return render_template("dashboard.html", username=session["username"], role=session["role"])
+# Comments page: logged-in users can post and read comments
+@app.route("/comments", methods=["GET", "POST"])
+def comments():
+    if "username" not in session:
+        return redirect("/login")
+    conn = sqlite3.connect("database.db")
+    if request.method == "POST":
+        # BEFORE (vulnerable): content = request.form["content"]
+        # The comment was saved as typed, so <script> tags ran in the browser.
+        # SECURE: bleach removes every HTML tag except a few harmless
+        # formatting tags (<b>, <i>, <u>). <script>, onerror=, onclick=, etc.
+        # are stripped, so the browser can no longer run attacker code.
+        content = bleach.clean(
+            request.form["content"],
+            tags={"b", "i", "u"},
+            strip=True
+        )
+        conn.execute(
+            "INSERT INTO comments (username, content) VALUES (?, ?)",
+            (session["username"], content)
+        )
+        conn.commit()
+    rows = conn.execute("SELECT username, content FROM comments ORDER BY id DESC").fetchall()
+    conn.close()
+    return render_template("comments.html", comments=rows)
+
+# Admin page: shows all registered users
+# VULNERABLE: it only checks that the user is logged in, NOT their role,
+# so any normal user can open /admin and see every account.
+# RBAC (Role-Based Access Control):
+# A decorator that protects a page so only users with the required role
+# can open it. The role comes from the database at login and is stored in
+# the signed session, so users cannot change it themselves.
+def role_required(role):
+    def decorator(f):
+        @wraps(f)
+        def wrapper(*args, **kwargs):
+            if "username" not in session:      # Authentication: who are you?
+                return redirect("/login")
+            if session.get("role") != role:    # Authorization: are you allowed?
+                abort(403)                     # 403 Forbidden
+            return f(*args, **kwargs)
+        return wrapper
+    return decorator
+
+# Admin page: shows all registered users
+# BEFORE (vulnerable): only checked login, so any user could open /admin.
+# SECURE: @role_required("admin") allows admins only; others get 403.
+@app.route("/admin")
+@role_required("admin")
+def admin():
+    conn = sqlite3.connect("database.db")
+    users = conn.execute("SELECT id, username, role FROM users").fetchall()
+    conn.close()
+    return render_template("admin.html", users=users)
+
+
 
 
 # Clear the whole session so the user is fully logged out

@@ -1,0 +1,16 @@
+<!DOCTYPE html>
+<html>
+<head><title>Admin Panel</title></head>
+<body>
+  <h2>Admin Panel</h2>
+  <p>All registered users:</p>
+  <table border="1" cellpadding="6">
+    <tr><th>ID</th><th>Username</th><th>Role</th></tr>
+    {% for u in users %}
+      <tr><td>{{ u[0] }}</td><td>{{ u[1] }}</td><td>{{ u[2] }}</td></tr>
+    {% endfor %}
+  </table>
+  <br>
+  <a href="/dashboard">Back to Dashboard</a>
+</body>
+</html>

@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html>
+<head><title>Comments</title></head>
+<body>
+  <h2>Comments</h2>
+  <form method="POST">
+    <textarea name="content" rows="3" cols="40" placeholder="Write a comment..." required></textarea><br><br>
+    <button type="submit">Post</button>
+  </form>
+  <hr>
+  {% for c in comments %}
+    <!-- BEFORE (vulnerable): "| safe" showed the raw comment, so <script> ran.
+         "| safe" is OK now: the content was already sanitized by bleach
+         on the server, so only <b>, <i>, <u> can reach the browser -->
+    <p><b>{{ c[0] }}:</b> {{ c[1] | safe }}</p>
+  {% endfor %}
+  <a href="/dashboard">Back to Dashboard</a>
+</body>
+</html>
