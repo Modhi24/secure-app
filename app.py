@@ -5,8 +5,8 @@ and SQL Injection detection and mitigation.
 """
 
 import sqlite3
-from flask import Flask, render_template, request, session, redirect
-import hashlib  # used for MD5 hashing (weak - for demonstration only)
+from flask import Flask, render_template, request, session, redirect, abort
+from functools import wraps  # keeps the original function name when using a decoratorimport hashlib  # used for MD5 hashing (weak - for demonstration only)
 import re      # regular expressions - used to check password rules
 import bcrypt  # strong password hashing (salted + slow on purpose)
 import bleach  # removes dangerous HTML/JavaScript from user input (XSS protection)
@@ -153,18 +153,37 @@ def comments():
     conn.close()
     return render_template("comments.html", comments=rows)
 
-
 # Admin page: shows all registered users
 # VULNERABLE: it only checks that the user is logged in, NOT their role,
 # so any normal user can open /admin and see every account.
+# RBAC (Role-Based Access Control):
+# A decorator that protects a page so only users with the required role
+# can open it. The role comes from the database at login and is stored in
+# the signed session, so users cannot change it themselves.
+def role_required(role):
+    def decorator(f):
+        @wraps(f)
+        def wrapper(*args, **kwargs):
+            if "username" not in session:      # Authentication: who are you?
+                return redirect("/login")
+            if session.get("role") != role:    # Authorization: are you allowed?
+                abort(403)                     # 403 Forbidden
+            return f(*args, **kwargs)
+        return wrapper
+    return decorator
+
+# Admin page: shows all registered users
+# BEFORE (vulnerable): only checked login, so any user could open /admin.
+# SECURE: @role_required("admin") allows admins only; others get 403.
 @app.route("/admin")
+@role_required("admin")
 def admin():
-    if "username" not in session:
-        return redirect("/login")
     conn = sqlite3.connect("database.db")
     users = conn.execute("SELECT id, username, role FROM users").fetchall()
     conn.close()
     return render_template("admin.html", users=users)
+
+
 
 
 # Clear the whole session so the user is fully logged out
