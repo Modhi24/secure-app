@@ -9,7 +9,7 @@ from flask import Flask, render_template, request, session, redirect
 import hashlib  # used for MD5 hashing (weak - for demonstration only)
 import re      # regular expressions - used to check password rules
 import bcrypt  # strong password hashing (salted + slow on purpose)
-
+import bleach  # removes dangerous HTML/JavaScript from user input (XSS protection)
 app = Flask(__name__)
 
 # Secret key used to sign the session cookie so users cannot modify it
@@ -136,9 +136,16 @@ def comments():
         return redirect("/login")
     conn = sqlite3.connect("database.db")
     if request.method == "POST":
-        content = request.form["content"]
-        # VULNERABLE: the comment is saved exactly as the user typed it,
-        # including any HTML or <script> tags.
+                # BEFORE (vulnerable): content = request.form["content"]
+        # The comment was saved as typed, so <script> tags ran in the browser.
+        # SECURE: bleach removes every HTML tag except a few harmless
+        # formatting tags (<b>, <i>, <u>). <script>, onerror=, onclick=, etc.
+        # are stripped, so the browser can no longer run attacker code.
+        content = bleach.clean(
+            request.form["content"],
+            tags={"b", "i", "u"},
+            strip=True
+        )
         conn.execute(
             "INSERT INTO comments (username, content) VALUES (?, ?)",
             (session["username"], content)
