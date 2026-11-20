@@ -4,16 +4,30 @@ Student 1 part: basic app (register, login, dashboard, logout)
 and SQL Injection detection and mitigation.
 """
 
+import os
 import sqlite3
+from datetime import timedelta
+from pathlib import Path
 from flask import Flask, render_template, request, session, redirect, abort
-from functools import wraps  # keeps the original function name when using a decoratorimport hashlib  # used for MD5 hashing (weak - for demonstration only)
+from functools import wraps
 import re      # regular expressions - used to check password rules
 import bcrypt  # strong password hashing (salted + slow on purpose)
 import bleach  # removes dangerous HTML/JavaScript from user input (XSS protection)
-app = Flask(__name__)
+from session_security import EncryptedSessionInterface
 
-# Secret key used to sign the session cookie so users cannot modify it
-app.secret_key = "change-this-secret-key"
+app = Flask(__name__)
+app.config.update(
+    SESSION_COOKIE_SECURE=True,    # Send the session cookie over HTTPS.
+    SESSION_COOKIE_HTTPONLY=True,  # Prevent browser scripts from reading it.
+    SESSION_COOKIE_SAMESITE="Lax", # Restrict cross-site sending.
+    SESSION_COOKIE_NAME="secure_app_session",
+    PERMANENT_SESSION_LIFETIME=timedelta(hours=1),
+)
+
+session_key = os.environ.get("SESSION_ENCRYPTION_KEY")
+if not session_key:
+    raise RuntimeError("Set SESSION_ENCRYPTION_KEY to a Fernet key before starting the app.")
+app.session_interface = EncryptedSessionInterface(session_key)
 
 
 # Create the users table if it does not exist.
@@ -63,22 +77,14 @@ def register():
     if request.method == "POST":
         username = request.form["username"]
         password = request.form["password"]
-                # Reject weak passwords before saving anything
-        if not is_strong_password(password):
+        # Reject weak passwords before saving anything
+        if not is_strong_password(password) or len(password.encode("utf-8")) > 72:
             message = "Password does not meet the requirements below"
             return render_template("register.html", message=message)
         conn = sqlite3.connect("database.db")
         try:
-            # VULNERABLE VERSION (before fix):
-            #   query = f"INSERT INTO users (username, password) VALUES ('{username}', '{password}')"
-            # User input was inserted directly into the SQL string,
-            # so an attacker could inject SQL code.
-            # SECURE: parameterized query - user input is treated as data, not SQL code
-            # BEFORE (weak): hashed = hashlib.md5(password.encode()).hexdigest()
-            # MD5 is fast and unsalted -> cracked instantly by crackstation.
-            # SECURE: bcrypt adds a random salt to every password (so the same
-            # password gives a different hash each time) and is slow on purpose,
-            # which makes rainbow tables and brute-force attacks impractical.
+            # bcrypt adds a random salt and makes each password guess costly.
+            # Bind form values separately from SQL to prevent SQL injection.
             hashed = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
             conn.execute(
                 "INSERT INTO users (username, password) VALUES (?, ?)",
@@ -92,6 +98,16 @@ def register():
     return render_template("register.html", message=message)
 
 
+def password_matches(password, stored_hash):
+    if len(password.encode("utf-8")) > 72:
+        return False
+    try:
+        return bcrypt.checkpw(password.encode("utf-8"), stored_hash.encode("utf-8"))
+    except ValueError:
+        # Earlier demo accounts used plaintext or MD5. Require re-registration.
+        return False
+
+
 # Login: check the user's credentials and start a session
 @app.route("/login", methods=["GET", "POST"])
 def login():
@@ -100,20 +116,15 @@ def login():
         username = request.form["username"]
         password = request.form["password"]
         conn = sqlite3.connect("database.db")
-        # VULNERABLE VERSION (before fix):
-        #   query = f"SELECT ... WHERE username='{username}' AND password='{password}'"
-        # Entering  ' OR '1'='1' --  as username bypassed the login,
-        # because '1'='1' is always true and -- comments out the password check.
-        # SECURE: parameterized query prevents SQL Injection
-        # bcrypt hashes contain a random salt, so we cannot compare them
-        # inside SQL. Get the user by username, then let bcrypt check it.
+        # Bind the username and verify the stored bcrypt hash separately.
         row = conn.execute(
             "SELECT username, password, role FROM users WHERE username=?",
             (username,)
         ).fetchone()
         conn.close()
-        if row and bcrypt.checkpw(password.encode(), row[1].encode()):
-            # Store user info in the session to keep them logged in
+        if row and password_matches(password, row[1]):
+            # Replace any previous session after successful authentication.
+            session.clear()
             session["username"] = row[0]
             session["role"] = row[2]
             return redirect("/dashboard")
@@ -127,6 +138,11 @@ def dashboard():
     if "username" not in session:
         return redirect("/login")
     return render_template("dashboard.html", username=session["username"], role=session["role"])
+def clean_comment(content):
+    # Allow simple formatting and remove every HTML attribute.
+    return bleach.clean(content, tags={"b", "i", "u"}, attributes={}, strip=True)
+
+
 # Comments page: logged-in users can post and read comments
 @app.route("/comments", methods=["GET", "POST"])
 def comments():
@@ -134,16 +150,7 @@ def comments():
         return redirect("/login")
     conn = sqlite3.connect("database.db")
     if request.method == "POST":
-        # BEFORE (vulnerable): content = request.form["content"]
-        # The comment was saved as typed, so <script> tags ran in the browser.
-        # SECURE: bleach removes every HTML tag except a few harmless
-        # formatting tags (<b>, <i>, <u>). <script>, onerror=, onclick=, etc.
-        # are stripped, so the browser can no longer run attacker code.
-        content = bleach.clean(
-            request.form["content"],
-            tags={"b", "i", "u"},
-            strip=True
-        )
+        content = clean_comment(request.form["content"])
         conn.execute(
             "INSERT INTO comments (username, content) VALUES (?, ?)",
             (session["username"], content)
@@ -151,7 +158,9 @@ def comments():
         conn.commit()
     rows = conn.execute("SELECT username, content FROM comments ORDER BY id DESC").fetchall()
     conn.close()
-    return render_template("comments.html", comments=rows)
+    # Clean earlier comments too, since they may predate the save-time filter.
+    safe_rows = [(username, clean_comment(content)) for username, content in rows]
+    return render_template("comments.html", comments=safe_rows)
 
 # Admin page: shows all registered users
 # VULNERABLE: it only checks that the user is logged in, NOT their role,
@@ -159,7 +168,7 @@ def comments():
 # RBAC (Role-Based Access Control):
 # A decorator that protects a page so only users with the required role
 # can open it. The role comes from the database at login and is stored in
-# the signed session, so users cannot change it themselves.
+# the encrypted and authenticated session, so users cannot change it themselves.
 def role_required(role):
     def decorator(f):
         @wraps(f)
@@ -205,4 +214,10 @@ def add_no_cache_headers(response):
 
 if __name__ == "__main__":
     init_db()
-    app.run(debug=True)
+    # Use TLS on loopback for the course demo and leave the debugger disabled.
+    tls_dir = Path(__file__).resolve().parent / ".local-tls"
+    cert = tls_dir / "cert.pem"
+    key = tls_dir / "key.pem"
+    if not cert.is_file() or not key.is_file():
+        raise SystemExit("Run python setup_local_tls.py before starting the app.")
+    app.run(host="127.0.0.1", port=5000, debug=False, ssl_context=(str(cert), str(key)))
