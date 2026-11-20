@@ -6,6 +6,7 @@ and SQL Injection detection and mitigation.
 
 import sqlite3
 from flask import Flask, render_template, request, session, redirect
+import hashlib  # used for MD5 hashing (weak - for demonstration only)
 
 app = Flask(__name__)
 
@@ -50,9 +51,13 @@ def register():
             # so an attacker could inject SQL code.
             #
             # SECURE: parameterized query - user input is treated as data, not SQL code
+            # WEAK PASSWORD STORAGE (vulnerable on purpose):
+            # MD5 is very fast and has no salt, so the same password always
+            # gives the same hash and it can be cracked with rainbow tables.
+            hashed = hashlib.md5(password.encode()).hexdigest()
             conn.execute(
                 "INSERT INTO users (username, password) VALUES (?, ?)",
-                (username, password)
+                (username, hashed)
             )
             conn.commit()
             message = "Registered successfully!"
@@ -76,9 +81,11 @@ def login():
         # because '1'='1' is always true and -- comments out the password check.
         #
         # SECURE: parameterized query prevents SQL Injection
+                # Hash the entered password with MD5 and compare it to the stored hash
+        hashed = hashlib.md5(password.encode()).hexdigest()
         user = conn.execute(
             "SELECT username, role FROM users WHERE username=? AND password=?",
-            (username, password)
+            (username, hashed)
         ).fetchone()
         conn.close()
         if user:
