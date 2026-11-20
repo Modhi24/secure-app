@@ -1,3 +1,7 @@
-venv/
+/.local-tls/
+/venv/
+/.venv/
 __pycache__/
-database.db
+*.py[cod]
+/database.db*
+/.env
