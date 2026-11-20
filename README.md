@@ -1,5 +1,3 @@
-# secure-app
-Secure Web Application - Detection and Mitigation of Security Vulnerabilities
 # Secure Web Application
 
 A CSC 429 project built with Flask and SQLite. It supports registration, login, a protected dashboard, comments, and an administrator-only account list. The final version uses bound SQL parameters, bcrypt, sanitized comments, role checks, HTTPS, and encrypted session cookies.
@@ -32,7 +30,7 @@ SQLite creates `database.db` on first run. Start with the clean database in a fr
 | Session encryption | In the same response inspect the cookie value. Review `session_security.py`, where Fernet encrypts the serialized session before it is sent to the browser. | The cookie holds an encrypted token. The test results in the report cover authenticated decryption, expiry, and invalid-token handling. |
 | Logout and Back | Sign in, open the dashboard, click Logout, then use Back. In a separate check enter the dashboard URL directly after logging out. | Both return to Login. |
 
-See `Security_Report.docx` for before-and-after findings, actual tests, challenges, and the access-control matrix.
+See `CSC429_Security_Report_Final.pdf` for before-and-after findings, actual tests, challenges, and the access-control matrix.
 
 ## References
 
@@ -40,4 +38,3 @@ See `Security_Report.docx` for before-and-after findings, actual tests, challeng
 - [Fernet authenticated encryption](https://cryptography.io/en/latest/fernet/)
 - [bcrypt](https://github.com/pyca/bcrypt)
 - [Bleach sanitization](https://bleach.readthedocs.io/en/latest/clean.html)
-
