@@ -28,6 +28,16 @@ def init_db():
             role TEXT DEFAULT 'user'
         )
     """)
+
+    # Comments table: stores user comments (used to demonstrate XSS)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS comments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT NOT NULL,
+            content TEXT NOT NULL
+        )
+    """)
+
     conn.commit()
     conn.close()
 
@@ -119,7 +129,24 @@ def dashboard():
     if "username" not in session:
         return redirect("/login")
     return render_template("dashboard.html", username=session["username"], role=session["role"])
-
+# Comments page: logged-in users can post and read comments
+@app.route("/comments", methods=["GET", "POST"])
+def comments():
+    if "username" not in session:
+        return redirect("/login")
+    conn = sqlite3.connect("database.db")
+    if request.method == "POST":
+        content = request.form["content"]
+        # VULNERABLE: the comment is saved exactly as the user typed it,
+        # including any HTML or <script> tags.
+        conn.execute(
+            "INSERT INTO comments (username, content) VALUES (?, ?)",
+            (session["username"], content)
+        )
+        conn.commit()
+    rows = conn.execute("SELECT username, content FROM comments ORDER BY id DESC").fetchall()
+    conn.close()
+    return render_template("comments.html", comments=rows)
 
 # Clear the whole session so the user is fully logged out
 @app.route("/logout")
