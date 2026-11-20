@@ -73,7 +73,6 @@ def register():
             #   query = f"INSERT INTO users (username, password) VALUES ('{username}', '{password}')"
             # User input was inserted directly into the SQL string,
             # so an attacker could inject SQL code.
-            #
             # SECURE: parameterized query - user input is treated as data, not SQL code
             # BEFORE (weak): hashed = hashlib.md5(password.encode()).hexdigest()
             # MD5 is fast and unsalted -> cracked instantly by crackstation.
@@ -105,7 +104,6 @@ def login():
         #   query = f"SELECT ... WHERE username='{username}' AND password='{password}'"
         # Entering  ' OR '1'='1' --  as username bypassed the login,
         # because '1'='1' is always true and -- comments out the password check.
-        #
         # SECURE: parameterized query prevents SQL Injection
         # bcrypt hashes contain a random salt, so we cannot compare them
         # inside SQL. Get the user by username, then let bcrypt check it.
@@ -136,7 +134,7 @@ def comments():
         return redirect("/login")
     conn = sqlite3.connect("database.db")
     if request.method == "POST":
-                # BEFORE (vulnerable): content = request.form["content"]
+        # BEFORE (vulnerable): content = request.form["content"]
         # The comment was saved as typed, so <script> tags ran in the browser.
         # SECURE: bleach removes every HTML tag except a few harmless
         # formatting tags (<b>, <i>, <u>). <script>, onerror=, onclick=, etc.
@@ -154,6 +152,20 @@ def comments():
     rows = conn.execute("SELECT username, content FROM comments ORDER BY id DESC").fetchall()
     conn.close()
     return render_template("comments.html", comments=rows)
+
+
+# Admin page: shows all registered users
+# VULNERABLE: it only checks that the user is logged in, NOT their role,
+# so any normal user can open /admin and see every account.
+@app.route("/admin")
+def admin():
+    if "username" not in session:
+        return redirect("/login")
+    conn = sqlite3.connect("database.db")
+    users = conn.execute("SELECT id, username, role FROM users").fetchall()
+    conn.close()
+    return render_template("admin.html", users=users)
+
 
 # Clear the whole session so the user is fully logged out
 @app.route("/logout")
