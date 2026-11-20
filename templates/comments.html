@@ -9,9 +9,7 @@
   </form>
   <hr>
   {% for c in comments %}
-    <!-- BEFORE (vulnerable): "| safe" showed the raw comment, so <script> ran.
-         "| safe" is OK now: the content was already sanitized by bleach
-         on the server, so only <b>, <i>, <u> can reach the browser -->
+    {# The server sanitizes comment content before it reaches this HTML body. #}
     <p><b>{{ c[0] }}:</b> {{ c[1] | safe }}</p>
   {% endfor %}
   <a href="/dashboard">Back to Dashboard</a>
